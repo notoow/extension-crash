@@ -74,7 +74,21 @@ node ./src/cli.js --url "https://target-site.example/path" --profile Default --b
 If you know what the healthy page should contain, add success patterns:
 
 ```bash
-node ./src/cli.js --url "https://target-site.example/path" --profile Default --success-pattern "상품" --url-must-contain "coupang.com"
+node ./src/cli.js --url "https://target-site.example/path" --profile Default --success-pattern "product" --url-must-contain "target-site.example"
+```
+
+Quickly retest only the suspect extensions from a previous report:
+
+```bash
+node ./src/cli.js --from-report "./reports/report-1234567890.json"
+```
+
+Retest mode still runs the suspect set even if the no-extension baseline becomes unstable, and notes that condition in the new report.
+
+Retest a specific extension ID directly:
+
+```bash
+node ./src/cli.js --url "https://target-site.example/path" --profile Default --extension-id "ooadnieabchijkibjpeieeliohjidnjj"
 ```
 
 ## Output
@@ -117,6 +131,7 @@ node ./src/cli.js --url "https://target-site.example/path" --profile Default
 3. If the report says `single-extension`, disable or remove that extension in the real browser and retest.
 4. If the report says `interaction`, disable the whole reported set and re-enable them one by one in the real browser.
 5. If the report says `baseline-fails`, rerun with `--block-pattern`, `--success-pattern`, or a different profile, because the site may be blocking automation itself.
+6. If you want a quick confirmation run after the first scan, use `--from-report` to retest only the suspicious set.
 
 ## Development
 

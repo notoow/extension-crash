@@ -4,10 +4,17 @@ import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
 import { discoverExtensions, listProfiles } from "./profile-discovery.js";
-import { runDetection } from "./test-runner.js";
+import { readDetectionReport, resolveRunInputs } from "./retest-config.js";
+import { runDetection, runRetest } from "./test-runner.js";
 
 async function main() {
   const args = parseArgs(process.argv.slice(2));
+  const reportContext = args.fromReport ? readDetectionReport(args.fromReport) : null;
+  const runInputs = resolveRunInputs({
+    args,
+    report: reportContext?.report,
+  });
+  const isRetestMode = Boolean(reportContext) || args.extensionIds.length > 0;
 
   if (args.help) {
     printHelp();
@@ -15,72 +22,88 @@ async function main() {
   }
 
   if (args.listProfiles) {
-    const profiles = listProfiles(args.browser);
+    const profiles = listProfiles(runInputs.browser);
     printProfiles(profiles);
     return;
   }
 
-  if (!args.url) {
+  if (!runInputs.url) {
     throw new Error("Missing required --url option.");
   }
 
   const discovery = discoverExtensions({
-    browser: args.browser,
-    profile: args.profile,
+    browser: runInputs.browser,
+    profile: runInputs.profile,
     includeAllLocations: args.includeAllLocations,
-    limit: args.limit,
+    limit: runInputs.selectedExtensionIds ? null : args.limit,
   });
 
-  if (discovery.extensions.length === 0) {
-    throw new Error(`No enabled extension candidates were found in profile "${args.profile}".`);
+  let candidates = discovery.extensions;
+  if (runInputs.selectedExtensionIds) {
+    const selectedIds = new Set(runInputs.selectedExtensionIds);
+    candidates = discovery.extensions.filter((extension) => selectedIds.has(extension.id));
+    const missingIds = runInputs.selectedExtensionIds.filter((id) => !candidates.some((extension) => extension.id === id));
+
+    if (missingIds.length > 0) {
+      console.error(`Warning: some requested extensions are not currently available in profile "${runInputs.profile}": ${missingIds.join(", ")}`);
+    }
+  } else if (typeof args.limit === "number") {
+    candidates = candidates.slice(0, args.limit);
+  }
+
+  if (candidates.length === 0) {
+    if (args.fromReport) {
+      throw new Error(`No retest candidates were found from report "${reportContext.absolutePath}".`);
+    }
+
+    throw new Error(`No enabled extension candidates were found in profile "${runInputs.profile}".`);
   }
 
   const reportDir = ensureReportDir(args.outputDir);
-  const reportPath = path.join(reportDir, `report-${Date.now()}.json`);
+  const reportFilePrefix = isRetestMode ? "retest-report" : "report";
+  const reportPath = path.join(reportDir, `${reportFilePrefix}-${Date.now()}.json`);
 
   console.log(`Browser: ${discovery.browser.displayName}`);
-  console.log(`Profile: ${args.profile}`);
-  console.log(`URL: ${args.url}`);
-  console.log(`Candidates: ${discovery.extensions.length}`);
+  console.log(`Profile: ${runInputs.profile}`);
+  console.log(`URL: ${runInputs.url}`);
+  console.log(`Candidates: ${candidates.length}`);
+  if (reportContext) {
+    console.log(`Source report: ${reportContext.absolutePath}`);
+  }
   console.log("");
   console.log("Candidate extensions:");
-  for (const extension of discovery.extensions) {
+  for (const extension of candidates) {
     console.log(`- ${extension.name} (${extension.id})`);
   }
   console.log("");
   console.log("Running diagnostics. Chrome windows may open briefly.");
 
-  const result = await runDetection({
+  const runner = isRetestMode ? runRetest : runDetection;
+  const result = await runner({
     executablePath: discovery.browser.executablePath,
     browserKey: discovery.browser.key,
-    targetUrl: args.url,
-    candidates: discovery.extensions,
+    targetUrl: runInputs.url,
+    candidates,
     reportDir,
     timeoutMs: args.timeoutMs,
     settleTimeMs: args.settleTimeMs,
-    detectionRules: {
-      blockPatterns: args.blockPatterns,
-      successPatterns: args.successPatterns,
-      requiredUrlFragments: args.requiredUrlFragments,
-    },
+    detectionRules: runInputs.detectionRules,
   });
 
   const report = {
     generatedAt: new Date().toISOString(),
+    mode: isRetestMode ? "retest" : "full-scan",
     browser: {
       key: discovery.browser.key,
       displayName: discovery.browser.displayName,
       executablePath: discovery.browser.executablePath,
       userDataDir: discovery.browser.userDataDir,
     },
-    profile: args.profile,
-    targetUrl: args.url,
-    detectionRules: {
-      blockPatterns: args.blockPatterns,
-      successPatterns: args.successPatterns,
-      requiredUrlFragments: args.requiredUrlFragments,
-    },
-    candidates: discovery.extensions,
+    profile: runInputs.profile,
+    targetUrl: runInputs.url,
+    sourceReport: reportContext?.absolutePath || null,
+    detectionRules: runInputs.detectionRules,
+    candidates,
     ...result,
   };
 
@@ -93,7 +116,7 @@ async function main() {
   if (result.diagnosis.culpritIds.length > 0) {
     console.log("");
     console.log("Likely culprit set:");
-    for (const extension of discovery.extensions.filter((item) => result.diagnosis.culpritIds.includes(item.id))) {
+    for (const extension of candidates.filter((item) => result.diagnosis.culpritIds.includes(item.id))) {
       console.log(`- ${extension.name} (${extension.id})`);
     }
   }
@@ -104,12 +127,13 @@ async function main() {
 
 function parseArgs(argv) {
   const args = {
-    browser: "chrome",
-    profile: "Default",
+    browser: "",
+    profile: "",
     includeAllLocations: false,
     listProfiles: false,
     help: false,
     url: "",
+    fromReport: "",
     limit: null,
     outputDir: path.resolve(process.cwd(), "reports"),
     timeoutMs: 25000,
@@ -117,6 +141,7 @@ function parseArgs(argv) {
     blockPatterns: [],
     successPatterns: [],
     requiredUrlFragments: [],
+    extensionIds: [],
   };
 
   for (let index = 0; index < argv.length; index += 1) {
@@ -134,6 +159,10 @@ function parseArgs(argv) {
         break;
       case "--url":
         args.url = next;
+        index += 1;
+        break;
+      case "--from-report":
+        args.fromReport = next;
         index += 1;
         break;
       case "--limit":
@@ -162,6 +191,10 @@ function parseArgs(argv) {
         break;
       case "--url-must-contain":
         args.requiredUrlFragments.push(next);
+        index += 1;
+        break;
+      case "--extension-id":
+        args.extensionIds.push(next);
         index += 1;
         break;
       case "--include-all-locations":
@@ -208,6 +241,8 @@ function printHelp() {
 Options:
   --browser <chrome|edge|brave>
   --profile <profile-directory>
+  --from-report <report.json>
+  --extension-id <id>
   --limit <number>
   --include-all-locations
   --output-dir <directory>

@@ -26,31 +26,15 @@ export async function runDetection(options) {
     settleTimeMs = 3500,
   } = options;
 
-  const tests = [];
-  const cache = new Map();
-
-  const execute = async (subset, label) => {
-    const cacheKey = subset.map((item) => item.id).sort().join(",");
-    if (cache.has(cacheKey)) {
-      return cache.get(cacheKey);
-    }
-
-    const result = await executeBrowserTest({
-      executablePath,
-      browserKey,
-      targetUrl,
-      extensions: subset,
-      timeoutMs,
-      settleTimeMs,
-      reportDir,
-      label,
-      detectionRules,
-    });
-
-    tests.push(result);
-    cache.set(cacheKey, result);
-    return result;
-  };
+  const { execute, tests } = createExecutor({
+    executablePath,
+    browserKey,
+    targetUrl,
+    reportDir,
+    detectionRules,
+    timeoutMs,
+    settleTimeMs,
+  });
 
   const baselineWithoutExtensions = await execute([], "baseline-none");
   const baselineWithAllExtensions = await execute(candidates, "baseline-all");
@@ -124,6 +108,79 @@ export async function runDetection(options) {
     diagnosis,
     baseline,
     minimalSet: minimalItems,
+    tests,
+  };
+}
+
+export async function runRetest(options) {
+  const {
+    executablePath,
+    browserKey,
+    targetUrl,
+    candidates,
+    reportDir,
+    detectionRules,
+    timeoutMs = 25000,
+    settleTimeMs = 3500,
+  } = options;
+
+  const { execute, tests } = createExecutor({
+    executablePath,
+    browserKey,
+    targetUrl,
+    reportDir,
+    detectionRules,
+    timeoutMs,
+    settleTimeMs,
+  });
+
+  const baselineWithoutExtensions = await execute([], "baseline-none");
+  const suspectSetResult = await execute(candidates, `retest-set-${candidates.length}`);
+  const individuallyBlocking = [];
+
+  for (const extension of candidates) {
+    const result = await execute([extension], `retest-single-${extension.id}`);
+    if (result.blocked) {
+      individuallyBlocking.push(extension);
+    }
+  }
+
+  const baselineNote = baselineWithoutExtensions.blocked
+    ? " The page also failed without extensions during retest, so the environment may be unstable."
+    : "";
+  const diagnosis = individuallyBlocking.length > 0
+    ? {
+        status: "single-extension",
+        reason: `The suspect extension still reproduced the failure on its own.${baselineNote}`,
+        culpritIds: individuallyBlocking.map((item) => item.id),
+      }
+    : suspectSetResult.blocked
+      ? {
+          status: candidates.length > 1 ? "interaction" : "inconclusive",
+          reason: candidates.length > 1
+            ? `The suspect set still reproduces the failure, but no single extension failed alone.${baselineNote}`
+            : `The single suspect still reproduced the failure, but confirmation stayed ambiguous.${baselineNote}`,
+          culpritIds: candidates.map((item) => item.id),
+        }
+      : baselineWithoutExtensions.blocked
+        ? {
+            status: "inconclusive",
+            reason: "The page failed even without extensions during retest, and the suspect set did not reproduce the original failure consistently.",
+            culpritIds: [],
+          }
+        : {
+            status: "not-reproduced",
+            reason: "The suspect set did not reproduce the failure during retest.",
+            culpritIds: [],
+          };
+
+  return {
+    diagnosis,
+    baseline: {
+      withoutExtensions: baselineWithoutExtensions,
+      withAllExtensions: suspectSetResult,
+    },
+    minimalSet: candidates,
     tests,
   };
 }
@@ -238,6 +295,49 @@ export async function executeBrowserTest(options) {
     await terminateProcess(chromeProcess);
     await safeRemoveDirectory(userDataDir);
   }
+}
+
+function createExecutor(options) {
+  const {
+    executablePath,
+    browserKey,
+    targetUrl,
+    reportDir,
+    detectionRules,
+    timeoutMs,
+    settleTimeMs,
+  } = options;
+
+  const tests = [];
+  const cache = new Map();
+
+  const execute = async (subset, label) => {
+    const cacheKey = subset.map((item) => item.id).sort().join(",");
+    if (cache.has(cacheKey)) {
+      return cache.get(cacheKey);
+    }
+
+    const result = await executeBrowserTest({
+      executablePath,
+      browserKey,
+      targetUrl,
+      extensions: subset,
+      timeoutMs,
+      settleTimeMs,
+      reportDir,
+      label,
+      detectionRules,
+    });
+
+    tests.push(result);
+    cache.set(cacheKey, result);
+    return result;
+  };
+
+  return {
+    execute,
+    tests,
+  };
 }
 
 function buildChromeArguments({ browserKey, userDataDir, extensionPaths }) {
