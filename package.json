@@ -1,0 +1,24 @@
+{
+  "name": "extension-crash",
+  "version": "0.1.0",
+  "description": "Diagnose Chromium extension conflicts by replaying a target URL with different extension sets.",
+  "type": "module",
+  "bin": {
+    "extension-crash": "./src/cli.js"
+  },
+  "scripts": {
+    "start": "node ./src/cli.js",
+    "profiles": "node ./src/cli.js --list-profiles",
+    "test": "node --test ./test/*.test.js"
+  },
+  "keywords": [
+    "chrome",
+    "extensions",
+    "diagnostics",
+    "coupang"
+  ],
+  "license": "MIT",
+  "dependencies": {
+    "puppeteer-core": "^24.4.0"
+  }
+}
