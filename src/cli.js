@@ -3,6 +3,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
+import { compareProfiles } from "./profile-compare.js";
 import { discoverExtensions, listProfiles } from "./profile-discovery.js";
 import { readDetectionReport, resolveRunInputs } from "./retest-config.js";
 import { runDetection, runRetest } from "./test-runner.js";
@@ -29,6 +30,43 @@ async function main() {
 
   if (!runInputs.url) {
     throw new Error("Missing required --url option.");
+  }
+
+  if (args.compareProfile) {
+    const reportDir = ensureReportDir(args.outputDir);
+    const reportPath = path.join(reportDir, `profile-compare-report-${Date.now()}.json`);
+    const comparison = await compareProfiles({
+      browser: runInputs.browser,
+      primaryProfile: runInputs.profile,
+      compareProfile: args.compareProfile,
+      targetUrl: runInputs.url,
+      reportDir,
+      detectionRules: runInputs.detectionRules,
+      timeoutMs: args.timeoutMs,
+      settleTimeMs: args.settleTimeMs,
+      includeAllLocations: args.includeAllLocations,
+    });
+
+    fs.writeFileSync(reportPath, JSON.stringify({
+      generatedAt: new Date().toISOString(),
+      mode: "profile-compare",
+      ...comparison,
+    }, null, 2));
+
+    console.log(`Browser: ${comparison.browser.displayName}`);
+    console.log(`Primary profile: ${comparison.primaryProfile}`);
+    console.log(`Compare profile: ${comparison.compareProfile}`);
+    console.log(`URL: ${comparison.targetUrl}`);
+    console.log("");
+    console.log(`Primary page: ${comparison.primarySnapshot.blocked ? "blocked" : "loaded"} (${comparison.primarySnapshot.title || comparison.primarySnapshot.finalUrl})`);
+    console.log(`Compare page: ${comparison.compareSnapshot.blocked ? "blocked" : "loaded"} (${comparison.compareSnapshot.title || comparison.compareSnapshot.finalUrl})`);
+    console.log("");
+    console.log(`Summary: ${comparison.summary.status}`);
+    console.log(comparison.summary.reason);
+    printComparisonHighlights(comparison.diff);
+    console.log("");
+    console.log(`Report written to ${reportPath}`);
+    return;
   }
 
   const discovery = discoverExtensions({
@@ -142,6 +180,7 @@ function parseArgs(argv) {
     successPatterns: [],
     requiredUrlFragments: [],
     extensionIds: [],
+    compareProfile: "",
   };
 
   for (let index = 0; index < argv.length; index += 1) {
@@ -163,6 +202,10 @@ function parseArgs(argv) {
         break;
       case "--from-report":
         args.fromReport = next;
+        index += 1;
+        break;
+      case "--compare-profile":
+        args.compareProfile = next;
         index += 1;
         break;
       case "--limit":
@@ -241,6 +284,7 @@ function printHelp() {
 Options:
   --browser <chrome|edge|brave>
   --profile <profile-directory>
+  --compare-profile <profile-directory>
   --from-report <report.json>
   --extension-id <id>
   --limit <number>
@@ -254,6 +298,51 @@ Options:
   --list-profiles
   --help
 `);
+}
+
+function printComparisonHighlights(diff) {
+  const highlightLines = [
+    formatComparisonLine("Extensions only in primary", diff.extensions.onlyInPrimary),
+    formatComparisonLine("Extensions only in compare", diff.extensions.onlyInCompare),
+    formatComparisonLine("Enabled only in primary", diff.extensions.enabledOnlyInPrimary),
+    formatComparisonLine("Enabled only in compare", diff.extensions.enabledOnlyInCompare),
+    formatCountLine("Cookie values changed", diff.cookies.valueChanged.length),
+    formatCountLine("Cookies only in primary", diff.cookies.onlyInPrimary.length),
+    formatCountLine("Cookies only in compare", diff.cookies.onlyInCompare.length),
+    formatCountLine("localStorage values changed", diff.localStorage.valueChanged.length),
+    formatCountLine("Service workers only in primary", diff.serviceWorkers.onlyInPrimary.length),
+    formatCountLine("Service workers only in compare", diff.serviceWorkers.onlyInCompare.length),
+  ].filter(Boolean);
+
+  if (highlightLines.length === 0) {
+    return;
+  }
+
+  console.log("Highlights:");
+  for (const line of highlightLines) {
+    console.log(`- ${line}`);
+  }
+}
+
+function formatComparisonLine(label, items) {
+  if (!items || items.length === 0) {
+    return "";
+  }
+
+  const names = items
+    .slice(0, 4)
+    .map((item) => item.name || item.id || item.key || String(item))
+    .join(", ");
+  const suffix = items.length > 4 ? ` (+${items.length - 4} more)` : "";
+  return `${label}: ${names}${suffix}`;
+}
+
+function formatCountLine(label, count) {
+  if (!count) {
+    return "";
+  }
+
+  return `${label}: ${count}`;
 }
 
 main().catch((error) => {

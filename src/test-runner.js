@@ -397,7 +397,7 @@ async function waitForDevToolsEndpoint({ chromeProcess, userDataDir, timeoutMs }
   throw new Error(`Timed out waiting for DevTools endpoint.\nSTDOUT:\n${stdout.join("")}\nSTDERR:\n${stderr.join("")}`);
 }
 
-function classifyBlocked({ responseStatus, title, bodyTextSample, finalUrl, navigationError, detectionRules }) {
+export function classifyBlocked({ responseStatus, title, bodyTextSample, finalUrl, navigationError, detectionRules }) {
   if (navigationError) {
     return true;
   }

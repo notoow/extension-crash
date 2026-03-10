@@ -24,6 +24,7 @@ Manual testing is slow. This project automates the process.
    - all candidate extensions
    - smaller subsets chosen by delta debugging
 4. Writes a JSON report with every test and the final diagnosis.
+5. Can compare two browser profiles to highlight profile-specific storage and extension deltas.
 
 ## Supported browsers
 
@@ -83,6 +84,12 @@ Quickly retest only the suspect extensions from a previous report:
 node ./src/cli.js --from-report "./reports/report-1234567890.json"
 ```
 
+Compare a failing profile against a working one for the same URL:
+
+```bash
+node ./src/cli.js --url "https://target-site.example/path" --profile "Profile 2" --compare-profile Default
+```
+
 Retest mode still runs the suspect set even if the no-extension baseline becomes unstable, and notes that condition in the new report.
 
 Retest a specific extension ID directly:
@@ -112,12 +119,21 @@ Typical outcomes:
 - `baseline-fails`: the page already fails with no extensions, so automatic isolation is unreliable
 - `inconclusive`: the failure pattern changed or could not be minimized cleanly
 
+Profile compare reports also include:
+
+- enabled extension differences between two profiles
+- cookie presence and hashed value deltas for the target URL
+- localStorage and sessionStorage key/value deltas
+- service worker, Cache Storage, and IndexedDB name differences
+- a high-level likely-cause summary
+
 ## Important limitations
 
 - Chrome must be installed locally.
 - The tool launches a fresh temporary browser profile, not your live profile.
 - Some extensions behave differently when reloaded from disk into a temporary profile.
 - Sites with aggressive bot detection may block automation even without extensions. In that case the report will usually end as `baseline-fails`.
+- Profile compare mode works best when Chrome windows using those profiles are closed, so cookies and storage files can be copied cleanly.
 
 ## Recommended workflow
 
