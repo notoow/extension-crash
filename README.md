@@ -90,6 +90,12 @@ Compare a failing profile against a working one for the same URL:
 node ./src/cli.js --url "https://target-site.example/path" --profile "Profile 2" --compare-profile Default
 ```
 
+Repair a live profile by clearing cookies and site storage for the target URL origin:
+
+```bash
+node ./src/cli.js --url "https://target-site.example/path" --profile "Profile 2" --repair-site-data
+```
+
 Retest mode still runs the suspect set even if the no-extension baseline becomes unstable, and notes that condition in the new report.
 
 Retest a specific extension ID directly:
@@ -127,6 +133,13 @@ Profile compare reports also include:
 - service worker, Cache Storage, and IndexedDB name differences
 - a high-level likely-cause summary
 
+Repair reports include:
+
+- the target origins that were cleared
+- cookies deleted for the target URL
+- before/after page state
+- before/after screenshots
+
 ## Important limitations
 
 - Chrome must be installed locally.
@@ -134,6 +147,7 @@ Profile compare reports also include:
 - Some extensions behave differently when reloaded from disk into a temporary profile.
 - Sites with aggressive bot detection may block automation even without extensions. In that case the report will usually end as `baseline-fails`.
 - Profile compare mode works best when Chrome windows using those profiles are closed, so cookies and storage files can be copied cleanly.
+- Repair mode modifies the real selected profile. Close all browser windows first, because the command clears the target site's cookies and storage for that profile.
 
 ## Recommended workflow
 

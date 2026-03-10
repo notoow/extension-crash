@@ -4,6 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
 import { compareProfiles } from "./profile-compare.js";
+import { repairProfileSiteData } from "./profile-repair.js";
 import { discoverExtensions, listProfiles } from "./profile-discovery.js";
 import { readDetectionReport, resolveRunInputs } from "./retest-config.js";
 import { runDetection, runRetest } from "./test-runner.js";
@@ -30,6 +31,41 @@ async function main() {
 
   if (!runInputs.url) {
     throw new Error("Missing required --url option.");
+  }
+
+  if (args.repairSiteData) {
+    const reportDir = ensureReportDir(args.outputDir);
+    const reportPath = path.join(reportDir, `repair-report-${Date.now()}.json`);
+    const repair = await repairProfileSiteData({
+      browser: runInputs.browser,
+      profile: runInputs.profile,
+      targetUrl: runInputs.url,
+      reportDir,
+      detectionRules: runInputs.detectionRules,
+      timeoutMs: args.timeoutMs,
+      settleTimeMs: args.settleTimeMs,
+    });
+
+    fs.writeFileSync(reportPath, JSON.stringify({
+      generatedAt: new Date().toISOString(),
+      mode: "repair-site-data",
+      ...repair,
+    }, null, 2));
+
+    console.log(`Browser: ${repair.browser.displayName}`);
+    console.log(`Profile: ${repair.profile}`);
+    console.log(`URL: ${repair.targetUrl}`);
+    console.log(`Repair origins: ${repair.repair.origins.join(", ")}`);
+    console.log(`Deleted cookies: ${repair.repair.deletedCookieCount}`);
+    console.log("");
+    console.log(`Before: ${repair.before.blocked ? "blocked" : "loaded"} (${repair.before.title || repair.before.finalUrl})`);
+    console.log(`After: ${repair.after.blocked ? "blocked" : "loaded"} (${repair.after.title || repair.after.finalUrl})`);
+    console.log("");
+    console.log(`Diagnosis: ${repair.diagnosis.status}`);
+    console.log(repair.diagnosis.reason);
+    console.log("");
+    console.log(`Report written to ${reportPath}`);
+    return;
   }
 
   if (args.compareProfile) {
@@ -181,6 +217,7 @@ function parseArgs(argv) {
     requiredUrlFragments: [],
     extensionIds: [],
     compareProfile: "",
+    repairSiteData: false,
   };
 
   for (let index = 0; index < argv.length; index += 1) {
@@ -207,6 +244,9 @@ function parseArgs(argv) {
       case "--compare-profile":
         args.compareProfile = next;
         index += 1;
+        break;
+      case "--repair-site-data":
+        args.repairSiteData = true;
         break;
       case "--limit":
         args.limit = Number.parseInt(next, 10);
@@ -285,6 +325,7 @@ Options:
   --browser <chrome|edge|brave>
   --profile <profile-directory>
   --compare-profile <profile-directory>
+  --repair-site-data
   --from-report <report.json>
   --extension-id <id>
   --limit <number>
