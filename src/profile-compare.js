@@ -411,66 +411,8 @@ async function inspectPageState({ browser, targetUrl, timeoutMs, settleTimeMs })
   await wait(settleTimeMs);
 
   const client = await page.target().createCDPSession();
-  let cookies = [];
-  try {
-    const cookieResult = await client.send("Network.getCookies", {
-      urls: [targetUrl],
-    });
-    cookies = normalizeCookies(cookieResult.cookies || []);
-  } catch {
-    cookies = [];
-  }
-
-  const state = await page.evaluate(async () => {
-    const safeEntries = (storage) => {
-      try {
-        return Object.entries(storage).map(([key, value]) => ({ key, value }));
-      } catch {
-        return [];
-      }
-    };
-    const safeCacheNames = async () => {
-      try {
-        return typeof caches !== "undefined" ? await caches.keys() : [];
-      } catch {
-        return [];
-      }
-    };
-    const safeServiceWorkers = async () => {
-      try {
-        if (!navigator.serviceWorker) {
-          return [];
-        }
-        const registrations = await navigator.serviceWorker.getRegistrations();
-        return registrations.map((registration) => registration.scope).filter(Boolean);
-      } catch {
-        return [];
-      }
-    };
-    const safeIndexedDbNames = async () => {
-      try {
-        if (typeof indexedDB.databases !== "function") {
-          return [];
-        }
-        const databases = await indexedDB.databases();
-        return databases.map((database) => database.name).filter(Boolean);
-      } catch {
-        return [];
-      }
-    };
-
-    return {
-      title: document.title || "",
-      bodyTextSample: (document.body?.innerText || "").slice(0, 4000),
-      finalUrl: location.href,
-      userAgent: navigator.userAgent,
-      localStorageEntries: safeEntries(localStorage),
-      sessionStorageEntries: safeEntries(sessionStorage),
-      cacheStorageNames: await safeCacheNames(),
-      serviceWorkerScopes: await safeServiceWorkers(),
-      indexedDbNames: await safeIndexedDbNames(),
-    };
-  });
+  const cookies = await readCookies(client, targetUrl);
+  const state = await readPageStateWithRetry(page);
 
   return {
     page,
@@ -487,6 +429,86 @@ async function inspectPageState({ browser, targetUrl, timeoutMs, settleTimeMs })
     cacheStorageNames: uniqueStrings(state.cacheStorageNames),
     serviceWorkerScopes: uniqueStrings(state.serviceWorkerScopes),
   };
+}
+
+async function readCookies(client, targetUrl) {
+  try {
+    const cookieResult = await client.send("Network.getCookies", {
+      urls: [targetUrl],
+    });
+    return normalizeCookies(cookieResult.cookies || []);
+  } catch {
+    return [];
+  }
+}
+
+async function readPageStateWithRetry(page) {
+  for (let attempt = 0; attempt < 6; attempt += 1) {
+    try {
+      return await page.evaluate(async () => {
+        const safeEntries = (storage) => {
+          try {
+            return Object.entries(storage).map(([key, value]) => ({ key, value }));
+          } catch {
+            return [];
+          }
+        };
+        const safeCacheNames = async () => {
+          try {
+            return typeof caches !== "undefined" ? await caches.keys() : [];
+          } catch {
+            return [];
+          }
+        };
+        const safeServiceWorkers = async () => {
+          try {
+            if (!navigator.serviceWorker) {
+              return [];
+            }
+            const registrations = await navigator.serviceWorker.getRegistrations();
+            return registrations.map((registration) => registration.scope).filter(Boolean);
+          } catch {
+            return [];
+          }
+        };
+        const safeIndexedDbNames = async () => {
+          try {
+            if (typeof indexedDB.databases !== "function") {
+              return [];
+            }
+            const databases = await indexedDB.databases();
+            return databases.map((database) => database.name).filter(Boolean);
+          } catch {
+            return [];
+          }
+        };
+
+        return {
+          title: document.title || "",
+          bodyTextSample: (document.body?.innerText || "").slice(0, 4000),
+          finalUrl: location.href,
+          userAgent: navigator.userAgent,
+          localStorageEntries: safeEntries(localStorage),
+          sessionStorageEntries: safeEntries(sessionStorage),
+          cacheStorageNames: await safeCacheNames(),
+          serviceWorkerScopes: await safeServiceWorkers(),
+          indexedDbNames: await safeIndexedDbNames(),
+        };
+      });
+    } catch (error) {
+      if (!isExecutionContextReset(error) || attempt === 5) {
+        throw error;
+      }
+      await wait(500 * (attempt + 1));
+    }
+  }
+}
+
+function isExecutionContextReset(error) {
+  const message = error instanceof Error ? error.message : String(error);
+  return message.includes("Execution context was destroyed")
+    || message.includes("Cannot find context with specified id")
+    || message.includes("Target closed");
 }
 
 function diffExtensions(primaryExtensions, compareExtensions) {
