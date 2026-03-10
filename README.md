@@ -90,6 +90,18 @@ Compare a failing profile against a working one for the same URL:
 node ./src/cli.js --url "https://target-site.example/path" --profile "Profile 2" --compare-profile Default
 ```
 
+Run doctor mode to compare profiles and get a repair recommendation in one step:
+
+```bash
+node ./src/cli.js --url "https://target-site.example/path" --profile "Profile 2" --compare-profile Default --doctor
+```
+
+If doctor mode says site data is the problem and Chrome is closed, let it run the repair automatically:
+
+```bash
+node ./src/cli.js --url "https://target-site.example/path" --profile "Profile 2" --compare-profile Default --doctor --auto-repair
+```
+
 Repair a live profile by clearing cookies and site storage for the target URL origin:
 
 ```bash
@@ -139,6 +151,13 @@ Repair reports include:
 - cookies deleted for the target URL
 - before/after page state
 - before/after screenshots
+
+Doctor reports include:
+
+- the profile comparison summary
+- the recommended next action
+- the exact repair command to run
+- the repair result if `--auto-repair` was used
 
 ## Important limitations
 

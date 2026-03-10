@@ -3,6 +3,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
+import { runDoctor } from "./doctor.js";
 import { compareProfiles } from "./profile-compare.js";
 import { repairProfileSiteData } from "./profile-repair.js";
 import { discoverExtensions, listProfiles } from "./profile-discovery.js";
@@ -31,6 +32,44 @@ async function main() {
 
   if (!runInputs.url) {
     throw new Error("Missing required --url option.");
+  }
+
+  if (args.doctor) {
+    const reportDir = ensureReportDir(args.outputDir);
+    const reportPath = path.join(reportDir, `doctor-report-${Date.now()}.json`);
+    const doctor = await runDoctor({
+      browser: runInputs.browser,
+      profile: runInputs.profile,
+      compareProfile: args.compareProfile,
+      targetUrl: runInputs.url,
+      reportDir,
+      detectionRules: runInputs.detectionRules,
+      timeoutMs: args.timeoutMs,
+      settleTimeMs: args.settleTimeMs,
+      includeAllLocations: args.includeAllLocations,
+      autoRepair: args.autoRepair,
+    });
+
+    fs.writeFileSync(reportPath, JSON.stringify({
+      generatedAt: new Date().toISOString(),
+      mode: "doctor",
+      ...doctor,
+    }, null, 2));
+
+    console.log(`Doctor plan: ${doctor.plan.status}`);
+    console.log(doctor.plan.reason);
+    if (doctor.plan.recommendedCommand) {
+      console.log("");
+      console.log(`Recommended command: ${doctor.plan.recommendedCommand}`);
+    }
+    if (doctor.repair) {
+      console.log("");
+      console.log(`Repair result: ${doctor.repair.diagnosis.status}`);
+      console.log(doctor.repair.diagnosis.reason);
+    }
+    console.log("");
+    console.log(`Report written to ${reportPath}`);
+    return;
   }
 
   if (args.repairSiteData) {
@@ -218,6 +257,8 @@ function parseArgs(argv) {
     extensionIds: [],
     compareProfile: "",
     repairSiteData: false,
+    doctor: false,
+    autoRepair: false,
   };
 
   for (let index = 0; index < argv.length; index += 1) {
@@ -247,6 +288,12 @@ function parseArgs(argv) {
         break;
       case "--repair-site-data":
         args.repairSiteData = true;
+        break;
+      case "--doctor":
+        args.doctor = true;
+        break;
+      case "--auto-repair":
+        args.autoRepair = true;
         break;
       case "--limit":
         args.limit = Number.parseInt(next, 10);
@@ -325,6 +372,8 @@ Options:
   --browser <chrome|edge|brave>
   --profile <profile-directory>
   --compare-profile <profile-directory>
+  --doctor
+  --auto-repair
   --repair-site-data
   --from-report <report.json>
   --extension-id <id>
