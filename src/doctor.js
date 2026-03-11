@@ -9,6 +9,7 @@ export async function runDoctor(options) {
     targetUrl,
     reportDir,
     detectionRules,
+    siteTemplate = null,
     timeoutMs = 25000,
     settleTimeMs = 3500,
     includeAllLocations = false,
@@ -34,6 +35,7 @@ export async function runDoctor(options) {
     profile,
     compareProfile,
     targetUrl,
+    siteTemplate,
     comparison,
   });
   let repair = null;
@@ -57,7 +59,7 @@ export async function runDoctor(options) {
   };
 }
 
-export function buildDoctorPlan({ profile, compareProfile, targetUrl, comparison }) {
+export function buildDoctorPlan({ profile, compareProfile, targetUrl, siteTemplate, comparison }) {
   const summaryStatus = comparison.summary.status;
   const likelyCause = comparison.summary.likelyCause;
   const primaryBlocked = Boolean(comparison.primarySnapshot.blocked);
@@ -68,7 +70,7 @@ export function buildDoctorPlan({ profile, compareProfile, targetUrl, comparison
       status: "repair-recommended",
       reason: `The failing profile "${profile}" is blocked while "${compareProfile}" loads, and the strongest signal is profile-scoped site data.`,
       autoRepairSafe: true,
-      recommendedCommand: buildRepairCommand({ profile, targetUrl }),
+      recommendedCommand: buildRepairCommand({ profile, targetUrl, siteTemplate }),
     };
   }
 
@@ -77,7 +79,7 @@ export function buildDoctorPlan({ profile, compareProfile, targetUrl, comparison
       status: "watch-site-data",
       reason: `The page loaded in both profiles during this run, but site data still differs. If the failure comes back in "${profile}", the first repair should be a site-data reset.`,
       autoRepairSafe: false,
-      recommendedCommand: buildRepairCommand({ profile, targetUrl }),
+      recommendedCommand: buildRepairCommand({ profile, targetUrl, siteTemplate }),
     };
   }
 
@@ -86,7 +88,7 @@ export function buildDoctorPlan({ profile, compareProfile, targetUrl, comparison
       status: "inspect-extension-state",
       reason: `The failing profile "${profile}" differs mainly in enabled extension state versus "${compareProfile}".`,
       autoRepairSafe: false,
-      recommendedCommand: buildCompareCommand({ profile, compareProfile, targetUrl }),
+      recommendedCommand: buildCompareCommand({ profile, compareProfile, targetUrl, siteTemplate }),
     };
   }
 
@@ -103,14 +105,22 @@ export function buildDoctorPlan({ profile, compareProfile, targetUrl, comparison
     status: "observe",
     reason: "No immediate automated repair is recommended from this run.",
     autoRepairSafe: false,
-    recommendedCommand: buildCompareCommand({ profile, compareProfile, targetUrl }),
+    recommendedCommand: buildCompareCommand({ profile, compareProfile, targetUrl, siteTemplate }),
   };
 }
 
-function buildRepairCommand({ profile, targetUrl }) {
-  return `node ./src/cli.js --url "${targetUrl}" --profile "${profile}" --repair-site-data`;
+function buildRepairCommand({ profile, targetUrl, siteTemplate }) {
+  return `node ./src/cli.js --url "${targetUrl}" --profile "${profile}"${formatSiteTemplateFlag(siteTemplate)} --repair-site-data`;
 }
 
-function buildCompareCommand({ profile, compareProfile, targetUrl }) {
-  return `node ./src/cli.js --url "${targetUrl}" --profile "${profile}" --compare-profile "${compareProfile}"`;
+function buildCompareCommand({ profile, compareProfile, targetUrl, siteTemplate }) {
+  return `node ./src/cli.js --url "${targetUrl}" --profile "${profile}" --compare-profile "${compareProfile}"${formatSiteTemplateFlag(siteTemplate)}`;
+}
+
+function formatSiteTemplateFlag(siteTemplate) {
+  const resolvedName = siteTemplate?.resolved?.name;
+  if (!resolvedName) {
+    return "";
+  }
+  return ` --site-template "${resolvedName}"`;
 }

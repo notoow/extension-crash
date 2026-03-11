@@ -8,6 +8,7 @@ import { compareProfiles } from "./profile-compare.js";
 import { repairProfileSiteData } from "./profile-repair.js";
 import { discoverExtensions, listProfiles } from "./profile-discovery.js";
 import { readDetectionReport, resolveRunInputs } from "./retest-config.js";
+import { listSiteTemplates } from "./site-templates.js";
 import { runDetection, runRetest } from "./test-runner.js";
 
 async function main() {
@@ -30,6 +31,11 @@ async function main() {
     return;
   }
 
+  if (args.listTemplates) {
+    printTemplates(listSiteTemplates());
+    return;
+  }
+
   if (!runInputs.url) {
     throw new Error("Missing required --url option.");
   }
@@ -44,6 +50,7 @@ async function main() {
       targetUrl: runInputs.url,
       reportDir,
       detectionRules: runInputs.detectionRules,
+      siteTemplate: runInputs.siteTemplate,
       timeoutMs: args.timeoutMs,
       settleTimeMs: args.settleTimeMs,
       includeAllLocations: args.includeAllLocations,
@@ -53,11 +60,16 @@ async function main() {
     fs.writeFileSync(reportPath, JSON.stringify({
       generatedAt: new Date().toISOString(),
       mode: "doctor",
+      siteTemplate: runInputs.siteTemplate,
       ...doctor,
     }, null, 2));
 
     console.log(`Doctor plan: ${doctor.plan.status}`);
     console.log(doctor.plan.reason);
+    if (args.autoRepair && !doctor.repair) {
+      console.log("");
+      console.log("Auto repair skipped because the doctor plan did not mark this run as safe to repair automatically.");
+    }
     if (doctor.plan.recommendedCommand) {
       console.log("");
       console.log(`Recommended command: ${doctor.plan.recommendedCommand}`);
@@ -88,6 +100,7 @@ async function main() {
     fs.writeFileSync(reportPath, JSON.stringify({
       generatedAt: new Date().toISOString(),
       mode: "repair-site-data",
+      siteTemplate: runInputs.siteTemplate,
       ...repair,
     }, null, 2));
 
@@ -125,6 +138,7 @@ async function main() {
     fs.writeFileSync(reportPath, JSON.stringify({
       generatedAt: new Date().toISOString(),
       mode: "profile-compare",
+      siteTemplate: runInputs.siteTemplate,
       ...comparison,
     }, null, 2));
 
@@ -215,6 +229,7 @@ async function main() {
     profile: runInputs.profile,
     targetUrl: runInputs.url,
     sourceReport: reportContext?.absolutePath || null,
+    siteTemplate: runInputs.siteTemplate,
     detectionRules: runInputs.detectionRules,
     candidates,
     ...result,
@@ -259,6 +274,8 @@ function parseArgs(argv) {
     repairSiteData: false,
     doctor: false,
     autoRepair: false,
+    siteTemplate: "",
+    listTemplates: false,
   };
 
   for (let index = 0; index < argv.length; index += 1) {
@@ -288,6 +305,10 @@ function parseArgs(argv) {
         break;
       case "--repair-site-data":
         args.repairSiteData = true;
+        break;
+      case "--site-template":
+        args.siteTemplate = next;
+        index += 1;
         break;
       case "--doctor":
         args.doctor = true;
@@ -333,6 +354,9 @@ function parseArgs(argv) {
       case "--list-profiles":
         args.listProfiles = true;
         break;
+      case "--list-templates":
+        args.listTemplates = true;
+        break;
       case "--help":
       case "-h":
         args.help = true;
@@ -372,6 +396,7 @@ Options:
   --browser <chrome|edge|brave>
   --profile <profile-directory>
   --compare-profile <profile-directory>
+  --site-template <name|auto|none>
   --doctor
   --auto-repair
   --repair-site-data
@@ -386,8 +411,21 @@ Options:
   --success-pattern <text>
   --url-must-contain <text>
   --list-profiles
+  --list-templates
   --help
 `);
+}
+
+function printTemplates(templates) {
+  if (templates.length === 0) {
+    console.log("No site templates available.");
+    return;
+  }
+
+  for (const template of templates) {
+    const hosts = template.hostSuffixes.length > 0 ? ` [hosts: ${template.hostSuffixes.join(", ")}]` : "";
+    console.log(`${template.name}: ${template.description}${hosts}`);
+  }
 }
 
 function printComparisonHighlights(diff) {

@@ -66,10 +66,22 @@ Include component and externally installed extensions:
 node ./src/cli.js --url "https://example.com" --profile Default --include-all-locations
 ```
 
+List built-in site templates:
+
+```bash
+node ./src/cli.js --list-templates
+```
+
 If the blocked page shows a custom message with HTTP 200, add text patterns so the tool can recognize failure:
 
 ```bash
 node ./src/cli.js --url "https://target-site.example/path" --profile Default --block-pattern "Access Denied" --block-pattern "Reference #"
+```
+
+Or let the tool auto-apply a known site template from the URL host:
+
+```bash
+node ./src/cli.js --url "https://www.coupang.com/" --profile "Profile 2" --site-template auto
 ```
 
 If you know what the healthy page should contain, add success patterns:
@@ -87,25 +99,25 @@ node ./src/cli.js --from-report "./reports/report-1234567890.json"
 Compare a failing profile against a working one for the same URL:
 
 ```bash
-node ./src/cli.js --url "https://target-site.example/path" --profile "Profile 2" --compare-profile Default
+node ./src/cli.js --url "https://target-site.example/path" --profile "Profile 2" --compare-profile Default --site-template auto
 ```
 
 Run doctor mode to compare profiles and get a repair recommendation in one step:
 
 ```bash
-node ./src/cli.js --url "https://target-site.example/path" --profile "Profile 2" --compare-profile Default --doctor
+node ./src/cli.js --url "https://target-site.example/path" --profile "Profile 2" --compare-profile Default --site-template auto --doctor
 ```
 
 If doctor mode says site data is the problem and Chrome is closed, let it run the repair automatically:
 
 ```bash
-node ./src/cli.js --url "https://target-site.example/path" --profile "Profile 2" --compare-profile Default --doctor --auto-repair
+node ./src/cli.js --url "https://target-site.example/path" --profile "Profile 2" --compare-profile Default --site-template auto --doctor --auto-repair
 ```
 
 Repair a live profile by clearing cookies and site storage for the target URL origin:
 
 ```bash
-node ./src/cli.js --url "https://target-site.example/path" --profile "Profile 2" --repair-site-data
+node ./src/cli.js --url "https://target-site.example/path" --profile "Profile 2" --site-template auto --repair-site-data
 ```
 
 Retest mode still runs the suspect set even if the no-extension baseline becomes unstable, and notes that condition in the new report.
@@ -158,6 +170,12 @@ Doctor reports include:
 - the recommended next action
 - the exact repair command to run
 - the repair result if `--auto-repair` was used
+
+Site templates:
+
+- can auto-fill block patterns and URL requirements for known hosts
+- can be disabled with `--site-template none`
+- are resolved automatically when `--site-template auto` is used
 
 ## Important limitations
 

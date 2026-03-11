@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { mergeDetectionRules, resolveSiteTemplate } from "./site-templates.js";
 
 export function readDetectionReport(reportPath) {
   const absolutePath = path.resolve(reportPath);
@@ -15,24 +16,26 @@ export function readDetectionReport(reportPath) {
 }
 
 export function resolveRunInputs({ args, report }) {
+  const url = args.url || report?.targetUrl || "";
+  const siteTemplate = resolveSiteTemplate({
+    requestedTemplate: args.siteTemplate || report?.siteTemplate?.requested || "",
+    url,
+  });
+
   return {
     browser: args.browser || report?.browser?.key || "chrome",
     profile: args.profile || report?.profile || "Default",
-    url: args.url || report?.targetUrl || "",
-    detectionRules: {
-      blockPatterns: uniqueValues([
-        ...(report?.detectionRules?.blockPatterns || []),
-        ...args.blockPatterns,
-      ]),
-      successPatterns: uniqueValues([
-        ...(report?.detectionRules?.successPatterns || []),
-        ...args.successPatterns,
-      ]),
-      requiredUrlFragments: uniqueValues([
-        ...(report?.detectionRules?.requiredUrlFragments || []),
-        ...args.requiredUrlFragments,
-      ]),
-    },
+    url,
+    siteTemplate,
+    detectionRules: mergeDetectionRules({
+      templateRules: siteTemplate.resolved?.detectionRules,
+      reportRules: report?.detectionRules || {},
+      argRules: {
+        blockPatterns: args.blockPatterns,
+        successPatterns: args.successPatterns,
+        requiredUrlFragments: args.requiredUrlFragments,
+      },
+    }),
     selectedExtensionIds: resolveSelectedExtensionIds({ args, report }),
   };
 }

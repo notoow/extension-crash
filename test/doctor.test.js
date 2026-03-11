@@ -7,6 +7,7 @@ test("buildDoctorPlan recommends repair for blocked profile with site data signa
     profile: "Profile 2",
     compareProfile: "Profile 7",
     targetUrl: "https://www.coupang.com/",
+    siteTemplate: { resolved: { name: "coupang" } },
     comparison: {
       summary: {
         status: "profile-state",
@@ -20,6 +21,7 @@ test("buildDoctorPlan recommends repair for blocked profile with site data signa
   assert.equal(plan.status, "repair-recommended");
   assert.equal(plan.autoRepairSafe, true);
   assert.match(plan.recommendedCommand, /--repair-site-data/);
+  assert.match(plan.recommendedCommand, /--site-template "coupang"/);
 });
 
 test("buildDoctorPlan suggests watch mode when the issue is not reproduced", () => {
@@ -27,6 +29,7 @@ test("buildDoctorPlan suggests watch mode when the issue is not reproduced", () 
     profile: "Profile 2",
     compareProfile: "Profile 7",
     targetUrl: "https://www.coupang.com/",
+    siteTemplate: { resolved: { name: "coupang" } },
     comparison: {
       summary: {
         status: "not-reproduced-with-delta",
