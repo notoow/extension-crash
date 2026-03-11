@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { deriveRepairTargets, summarizeRepairResult } from "../src/profile-repair.js";
+import { deriveRepairTargets, summarizeRepairResult, summarizeRestoreResult } from "../src/profile-repair.js";
 
 test("deriveRepairTargets deduplicates origins from target and final URLs", () => {
   const targets = deriveRepairTargets(
@@ -22,4 +22,24 @@ test("summarizeRepairResult reports success when cleanup fixes the page", () => 
   });
 
   assert.equal(summary.status, "repair-succeeded");
+});
+
+test("summarizeRestoreResult reports applied restore for healthy page", () => {
+  const summary = summarizeRestoreResult({
+    restoredCookieCount: 3,
+    restoredLocalStorageItemCount: 2,
+    afterBlocked: false,
+  });
+
+  assert.equal(summary.status, "restore-applied");
+});
+
+test("summarizeRestoreResult reports nothing when backup is empty", () => {
+  const summary = summarizeRestoreResult({
+    restoredCookieCount: 0,
+    restoredLocalStorageItemCount: 0,
+    afterBlocked: false,
+  });
+
+  assert.equal(summary.status, "nothing-restored");
 });

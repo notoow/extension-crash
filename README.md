@@ -120,6 +120,12 @@ Repair a live profile by clearing cookies and site storage for the target URL or
 node ./src/cli.js --url "https://target-site.example/path" --profile "Profile 2" --site-template auto --repair-site-data
 ```
 
+Restore cookies and localStorage from a previously created backup:
+
+```bash
+node ./src/cli.js --restore-backup "./reports/site-data-backup-1234567890-abcd1234.json"
+```
+
 Retest mode still runs the suspect set even if the no-extension baseline becomes unstable, and notes that condition in the new report.
 
 Retest a specific extension ID directly:
@@ -161,6 +167,14 @@ Repair reports include:
 
 - the target origins that were cleared
 - cookies deleted for the target URL
+- the backup file path created before cleanup
+- before/after page state
+- before/after screenshots
+
+Restore reports include:
+
+- the backup file that was applied
+- cookie and localStorage restore counts
 - before/after page state
 - before/after screenshots
 
@@ -176,6 +190,7 @@ Site templates:
 - can auto-fill block patterns and URL requirements for known hosts
 - can be disabled with `--site-template none`
 - are resolved automatically when `--site-template auto` is used
+- currently include `coupang`, `akamai-access-denied`, `cloudflare-challenge`, `datadome`, and `imperva-incapsula`
 
 ## Important limitations
 
@@ -185,6 +200,7 @@ Site templates:
 - Sites with aggressive bot detection may block automation even without extensions. In that case the report will usually end as `baseline-fails`.
 - Profile compare mode works best when Chrome windows using those profiles are closed, so cookies and storage files can be copied cleanly.
 - Repair mode modifies the real selected profile. Close all browser windows first, because the command clears the target site's cookies and storage for that profile.
+- Backup files contain sensitive cookies and storage values. Keep them local and delete them when you no longer need restore support.
 
 ## Recommended workflow
 

@@ -7,6 +7,7 @@ import { resolveBrowserEnvironment } from "./profile-discovery.js";
 import { classifyBlocked } from "./test-runner.js";
 
 const REPAIR_STORAGE_TYPES = "all";
+const BACKUP_NOTE = "This backup contains raw site cookies and localStorage values. Treat it as sensitive.";
 
 export async function repairProfileSiteData(options) {
   const {
@@ -15,6 +16,7 @@ export async function repairProfileSiteData(options) {
     targetUrl,
     reportDir,
     detectionRules,
+    siteTemplate = null,
     timeoutMs = 25000,
     settleTimeMs = 3500,
   } = options;
@@ -64,6 +66,20 @@ export async function repairProfileSiteData(options) {
       detectionRules,
     });
     const repairTargets = deriveRepairTargets(targetUrl, before.finalUrl);
+    const backup = await captureBackupState({
+      page,
+      browser: environment,
+      profile,
+      targetUrl,
+      detectionRules,
+      siteTemplate,
+      repairTargets,
+    });
+    const backupPath = writeSiteDataBackup({
+      reportDir,
+      runId,
+      backup,
+    });
     const repair = await clearSiteData({
       page,
       targetUrls: repairTargets.urls,
@@ -93,6 +109,10 @@ export async function repairProfileSiteData(options) {
         urls: repairTargets.urls,
         deletedCookieCount: repair.deletedCookies.length,
         deletedCookies: repair.deletedCookies,
+        backupPath,
+        backupCookieCount: backup.cookies.length,
+        backupLocalStorageItemCount: backup.localStorage.length,
+        backupSessionStorageItemCount: backup.sessionStorage.length,
       },
       before,
       after,
@@ -151,6 +171,144 @@ export function summarizeRepairResult({ beforeBlocked, afterBlocked }) {
   };
 }
 
+export async function restoreProfileSiteData(options) {
+  const {
+    backupPath,
+    reportDir,
+    detectionRules,
+    timeoutMs = 25000,
+    settleTimeMs = 3500,
+  } = options;
+
+  const backupContext = readSiteDataBackup(backupPath);
+  const backup = backupContext.backup;
+  const environment = resolveBrowserEnvironment(backup.browser?.key || "chrome");
+  assertBrowserClosed(environment.executablePath, environment.displayName);
+
+  const runId = `${Date.now()}-${randomUUID().slice(0, 8)}`;
+  const args = [
+    `--user-data-dir=${environment.userDataDir}`,
+    `--profile-directory=${backup.profile}`,
+    "--no-first-run",
+    "--no-default-browser-check",
+    "--disable-background-networking",
+    "--disable-sync",
+    "--remote-debugging-port=0",
+    "--new-window",
+    "about:blank",
+  ];
+  const chromeProcess = spawn(environment.executablePath, args, {
+    stdio: ["ignore", "pipe", "pipe"],
+    windowsHide: false,
+  });
+
+  let browserConnection;
+  try {
+    const wsEndpoint = await waitForDevToolsEndpoint({
+      chromeProcess,
+      userDataDir: environment.userDataDir,
+      timeoutMs,
+    });
+    browserConnection = await puppeteer.connect({
+      browserWSEndpoint: wsEndpoint,
+      defaultViewport: {
+        width: 1440,
+        height: 960,
+      },
+    });
+
+    const page = await getRepairPage(browserConnection);
+    const before = await capturePageState({
+      page,
+      targetUrl: backup.targetUrl,
+      timeoutMs,
+      settleTimeMs,
+      screenshotPath: path.join(reportDir, `restore-before-${runId}.png`),
+      detectionRules,
+    });
+    await clearSiteData({
+      page,
+      targetUrls: backup.urls || [backup.targetUrl],
+      targetOrigins: backup.origins || deriveRepairTargets(backup.targetUrl, backup.finalUrl).origins,
+    });
+    const restore = await restoreSiteData({
+      page,
+      backup,
+      targetUrl: backup.targetUrl,
+      timeoutMs,
+    });
+    const after = await capturePageState({
+      page,
+      targetUrl: backup.targetUrl,
+      timeoutMs,
+      settleTimeMs,
+      screenshotPath: path.join(reportDir, `restore-after-${runId}.png`),
+      detectionRules,
+    });
+
+    return {
+      browser: {
+        key: environment.key,
+        displayName: environment.displayName,
+        executablePath: environment.executablePath,
+        userDataDir: environment.userDataDir,
+      },
+      profile: backup.profile,
+      targetUrl: backup.targetUrl,
+      restore: {
+        backupPath: backupContext.absolutePath,
+        restoredCookieCount: restore.restoredCookieCount,
+        restoredLocalStorageItemCount: restore.restoredLocalStorageItemCount,
+        skippedSessionStorageItemCount: restore.skippedSessionStorageItemCount,
+      },
+      before,
+      after,
+      diagnosis: summarizeRestoreResult({
+        restoredCookieCount: restore.restoredCookieCount,
+        restoredLocalStorageItemCount: restore.restoredLocalStorageItemCount,
+        afterBlocked: after.blocked,
+      }),
+    };
+  } finally {
+    await closeBrowser(browserConnection);
+    await terminateProcess(chromeProcess);
+  }
+}
+
+export function summarizeRestoreResult({ restoredCookieCount, restoredLocalStorageItemCount, afterBlocked }) {
+  if (restoredCookieCount === 0 && restoredLocalStorageItemCount === 0) {
+    return {
+      status: "nothing-restored",
+      reason: "The backup did not contain cookies or localStorage entries to restore.",
+    };
+  }
+
+  if (afterBlocked) {
+    return {
+      status: "restore-applied-but-still-blocked",
+      reason: "The backup was restored, but the page is still blocked in the current profile state.",
+    };
+  }
+
+  return {
+    status: "restore-applied",
+    reason: "The backup was restored and the page loaded after restoration.",
+  };
+}
+
+export function readSiteDataBackup(backupPath) {
+  const absolutePath = path.resolve(backupPath);
+
+  if (!fs.existsSync(absolutePath)) {
+    throw new Error(`Backup file was not found: ${absolutePath}`);
+  }
+
+  return {
+    absolutePath,
+    backup: JSON.parse(fs.readFileSync(absolutePath, "utf8")),
+  };
+}
+
 function assertBrowserClosed(executablePath, displayName) {
   const processName = path.basename(executablePath);
   const result = spawnSync("tasklist", ["/FI", `IMAGENAME eq ${processName}`, "/FO", "CSV", "/NH"], {
@@ -173,6 +331,33 @@ function assertBrowserClosed(executablePath, displayName) {
 async function getRepairPage(browserConnection) {
   const pages = await browserConnection.pages();
   return pages[0] || browserConnection.newPage();
+}
+
+async function captureBackupState({ page, browser, profile, targetUrl, detectionRules, siteTemplate, repairTargets }) {
+  const detailedCookies = await readDetailedCookies(page, repairTargets.urls);
+  const state = await readPageStateWithRetry(page, {
+    includeSensitiveValues: true,
+  });
+
+  return {
+    generatedAt: new Date().toISOString(),
+    mode: "site-data-backup",
+    note: BACKUP_NOTE,
+    browser: {
+      key: browser.key,
+      displayName: browser.displayName,
+    },
+    profile,
+    targetUrl,
+    finalUrl: state.finalUrl,
+    siteTemplate,
+    detectionRules,
+    urls: repairTargets.urls,
+    origins: repairTargets.origins,
+    cookies: detailedCookies,
+    localStorage: attachOriginToEntries(state.localStorage, state.finalUrl),
+    sessionStorage: attachOriginToEntries(state.sessionStorage, state.finalUrl),
+  };
 }
 
 async function capturePageState({ page, targetUrl, timeoutMs, settleTimeMs, screenshotPath, detectionRules }) {
@@ -226,6 +411,12 @@ async function capturePageState({ page, targetUrl, timeoutMs, settleTimeMs, scre
   };
 }
 
+function writeSiteDataBackup({ reportDir, runId, backup }) {
+  const backupPath = path.join(reportDir, `site-data-backup-${runId}.json`);
+  fs.writeFileSync(backupPath, JSON.stringify(backup, null, 2));
+  return backupPath;
+}
+
 async function clearSiteData({ page, targetUrls, targetOrigins }) {
   const client = await page.target().createCDPSession();
   await client.send("Network.enable");
@@ -268,6 +459,48 @@ async function clearSiteData({ page, targetUrls, targetOrigins }) {
   };
 }
 
+async function restoreSiteData({ page, backup, targetUrl, timeoutMs }) {
+  const client = await page.target().createCDPSession();
+  await client.send("Network.enable");
+
+  let restoredCookieCount = 0;
+  for (const cookie of backup.cookies || []) {
+    const success = await setCookie(client, cookie, targetUrl);
+    if (success) {
+      restoredCookieCount += 1;
+    }
+  }
+
+  const localStorageByOrigin = groupEntriesByOrigin(backup.localStorage || []);
+  let restoredLocalStorageItemCount = 0;
+  for (const [origin, entries] of localStorageByOrigin.entries()) {
+    try {
+      await page.goto(origin, {
+        waitUntil: "domcontentloaded",
+        timeout: timeoutMs,
+      });
+      const restored = await page.evaluate((items) => {
+        localStorage.clear();
+        let count = 0;
+        for (const item of items) {
+          localStorage.setItem(item.key, item.value);
+          count += 1;
+        }
+        return count;
+      }, entries);
+      restoredLocalStorageItemCount += restored;
+    } catch {
+      // Ignore origins the browser cannot open directly.
+    }
+  }
+
+  return {
+    restoredCookieCount,
+    restoredLocalStorageItemCount,
+    skippedSessionStorageItemCount: Array.isArray(backup.sessionStorage) ? backup.sessionStorage.length : 0,
+  };
+}
+
 async function readCookies(page, targetUrl) {
   const client = await page.target().createCDPSession();
   try {
@@ -286,13 +519,43 @@ async function readCookies(page, targetUrl) {
   }
 }
 
-async function readPageStateWithRetry(page) {
+async function readDetailedCookies(page, targetUrls) {
+  const client = await page.target().createCDPSession();
+  try {
+    const cookieResult = await client.send("Network.getCookies", {
+      urls: targetUrls,
+    });
+    return (cookieResult.cookies || [])
+      .map((cookie) => ({
+        name: cookie.name,
+        value: cookie.value,
+        domain: cookie.domain,
+        path: cookie.path,
+        secure: Boolean(cookie.secure),
+        httpOnly: Boolean(cookie.httpOnly),
+        sameSite: cookie.sameSite,
+        expires: typeof cookie.expires === "number" ? cookie.expires : undefined,
+        partitionKey: cookie.partitionKey,
+      }))
+      .sort((left, right) => `${left.name}|${left.domain}|${left.path}`.localeCompare(`${right.name}|${right.domain}|${right.path}`));
+  } catch {
+    return [];
+  }
+}
+
+async function readPageStateWithRetry(page, options = {}) {
+  const {
+    includeSensitiveValues = false,
+  } = options;
+
   for (let attempt = 0; attempt < 6; attempt += 1) {
     try {
-      return await page.evaluate(async () => {
+      return await page.evaluate(async ({ includeValues }) => {
         const safeEntries = (storage) => {
           try {
-            return Object.entries(storage).map(([key, value]) => ({ key, valueLength: String(value || "").length }));
+            return Object.entries(storage).map(([key, value]) => includeValues
+              ? { key, value: String(value ?? "") }
+              : { key, valueLength: String(value || "").length });
           } catch {
             return [];
           }
@@ -338,6 +601,8 @@ async function readPageStateWithRetry(page) {
           serviceWorkerScopes: await safeServiceWorkers(),
           indexedDbNames: await safeIndexedDbNames(),
         };
+      }, {
+        includeValues: includeSensitiveValues,
       });
     } catch (error) {
       if (!isExecutionContextReset(error) || attempt === 5) {
@@ -353,6 +618,67 @@ function isExecutionContextReset(error) {
   return message.includes("Execution context was destroyed")
     || message.includes("Cannot find context with specified id")
     || message.includes("Target closed");
+}
+
+function attachOriginToEntries(entries, finalUrl) {
+  const origin = safeOrigin(finalUrl);
+  return entries.map((entry) => ({
+    origin,
+    ...entry,
+  }));
+}
+
+function groupEntriesByOrigin(entries) {
+  const grouped = new Map();
+  for (const entry of entries) {
+    const origin = entry.origin || "";
+    const bucket = grouped.get(origin) || [];
+    bucket.push({
+      key: entry.key,
+      value: entry.value,
+    });
+    grouped.set(origin, bucket);
+  }
+  return grouped;
+}
+
+async function setCookie(client, cookie, targetUrl) {
+  try {
+    const response = await client.send("Network.setCookie", {
+      name: cookie.name,
+      value: cookie.value,
+      url: buildCookieUrl(cookie, targetUrl),
+      domain: cookie.domain,
+      path: cookie.path,
+      secure: cookie.secure,
+      httpOnly: cookie.httpOnly,
+      sameSite: cookie.sameSite,
+      expires: cookie.expires,
+      partitionKey: cookie.partitionKey,
+    });
+    return Boolean(response?.success);
+  } catch {
+    return false;
+  }
+}
+
+function buildCookieUrl(cookie, targetUrl) {
+  try {
+    const target = new URL(targetUrl);
+    const host = String(cookie.domain || target.hostname).replace(/^\./, "");
+    const protocol = cookie.secure ? "https:" : (target.protocol || "https:");
+    return `${protocol}//${host}${cookie.path || "/"}`;
+  } catch {
+    return targetUrl;
+  }
+}
+
+function safeOrigin(value) {
+  try {
+    return new URL(value).origin;
+  } catch {
+    return "";
+  }
 }
 
 async function waitForDevToolsEndpoint({ chromeProcess, userDataDir, timeoutMs }) {

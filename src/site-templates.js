@@ -42,6 +42,34 @@ const SITE_TEMPLATES = [
       requiredUrlFragments: [],
     },
   },
+  {
+    name: "datadome",
+    description: "DataDome bot protection and anti-automation blocks.",
+    hostSuffixes: [],
+    detectionRules: {
+      blockPatterns: [
+        "datadome",
+        "please enable js and disable any ad blocker",
+        "captcha delivery network",
+      ],
+      successPatterns: [],
+      requiredUrlFragments: [],
+    },
+  },
+  {
+    name: "imperva-incapsula",
+    description: "Imperva/Incapsula blocking and incident pages.",
+    hostSuffixes: [],
+    detectionRules: {
+      blockPatterns: [
+        "incapsula incident id",
+        "request unsuccessful",
+        "imperva",
+      ],
+      successPatterns: [],
+      requiredUrlFragments: [],
+    },
+  },
 ];
 
 export function listSiteTemplates() {

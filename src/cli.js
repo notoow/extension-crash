@@ -5,7 +5,7 @@ import path from "node:path";
 import process from "node:process";
 import { runDoctor } from "./doctor.js";
 import { compareProfiles } from "./profile-compare.js";
-import { repairProfileSiteData } from "./profile-repair.js";
+import { readSiteDataBackup, repairProfileSiteData, restoreProfileSiteData } from "./profile-repair.js";
 import { discoverExtensions, listProfiles } from "./profile-discovery.js";
 import { readDetectionReport, resolveRunInputs } from "./retest-config.js";
 import { listSiteTemplates } from "./site-templates.js";
@@ -14,9 +14,10 @@ import { runDetection, runRetest } from "./test-runner.js";
 async function main() {
   const args = parseArgs(process.argv.slice(2));
   const reportContext = args.fromReport ? readDetectionReport(args.fromReport) : null;
+  const backupContext = args.restoreBackup ? readSiteDataBackup(args.restoreBackup) : null;
   const runInputs = resolveRunInputs({
     args,
-    report: reportContext?.report,
+    report: reportContext?.report || backupContext?.backup,
   });
   const isRetestMode = Boolean(reportContext) || args.extensionIds.length > 0;
 
@@ -38,6 +39,42 @@ async function main() {
 
   if (!runInputs.url) {
     throw new Error("Missing required --url option.");
+  }
+
+  if (args.restoreBackup) {
+    const reportDir = ensureReportDir(args.outputDir);
+    const reportPath = path.join(reportDir, `restore-report-${Date.now()}.json`);
+    const restore = await restoreProfileSiteData({
+      backupPath: backupContext.absolutePath,
+      reportDir,
+      detectionRules: runInputs.detectionRules,
+      timeoutMs: args.timeoutMs,
+      settleTimeMs: args.settleTimeMs,
+    });
+
+    fs.writeFileSync(reportPath, JSON.stringify({
+      generatedAt: new Date().toISOString(),
+      mode: "restore-backup",
+      siteTemplate: runInputs.siteTemplate,
+      ...restore,
+    }, null, 2));
+
+    console.log(`Browser: ${restore.browser.displayName}`);
+    console.log(`Profile: ${restore.profile}`);
+    console.log(`URL: ${restore.targetUrl}`);
+    console.log(`Backup: ${backupContext.absolutePath}`);
+    console.log(`Restored cookies: ${restore.restore.restoredCookieCount}`);
+    console.log(`Restored localStorage items: ${restore.restore.restoredLocalStorageItemCount}`);
+    console.log(`Skipped sessionStorage items: ${restore.restore.skippedSessionStorageItemCount}`);
+    console.log("");
+    console.log(`Before: ${restore.before.blocked ? "blocked" : "loaded"} (${restore.before.title || restore.before.finalUrl})`);
+    console.log(`After: ${restore.after.blocked ? "blocked" : "loaded"} (${restore.after.title || restore.after.finalUrl})`);
+    console.log("");
+    console.log(`Diagnosis: ${restore.diagnosis.status}`);
+    console.log(restore.diagnosis.reason);
+    console.log("");
+    console.log(`Report written to ${reportPath}`);
+    return;
   }
 
   if (args.doctor) {
@@ -93,6 +130,7 @@ async function main() {
       targetUrl: runInputs.url,
       reportDir,
       detectionRules: runInputs.detectionRules,
+      siteTemplate: runInputs.siteTemplate,
       timeoutMs: args.timeoutMs,
       settleTimeMs: args.settleTimeMs,
     });
@@ -109,6 +147,7 @@ async function main() {
     console.log(`URL: ${repair.targetUrl}`);
     console.log(`Repair origins: ${repair.repair.origins.join(", ")}`);
     console.log(`Deleted cookies: ${repair.repair.deletedCookieCount}`);
+    console.log(`Backup: ${repair.repair.backupPath}`);
     console.log("");
     console.log(`Before: ${repair.before.blocked ? "blocked" : "loaded"} (${repair.before.title || repair.before.finalUrl})`);
     console.log(`After: ${repair.after.blocked ? "blocked" : "loaded"} (${repair.after.title || repair.after.finalUrl})`);
@@ -262,6 +301,7 @@ function parseArgs(argv) {
     help: false,
     url: "",
     fromReport: "",
+    restoreBackup: "",
     limit: null,
     outputDir: path.resolve(process.cwd(), "reports"),
     timeoutMs: 25000,
@@ -297,6 +337,10 @@ function parseArgs(argv) {
         break;
       case "--from-report":
         args.fromReport = next;
+        index += 1;
+        break;
+      case "--restore-backup":
+        args.restoreBackup = next;
         index += 1;
         break;
       case "--compare-profile":
@@ -401,6 +445,7 @@ Options:
   --auto-repair
   --repair-site-data
   --from-report <report.json>
+  --restore-backup <backup.json>
   --extension-id <id>
   --limit <number>
   --include-all-locations
